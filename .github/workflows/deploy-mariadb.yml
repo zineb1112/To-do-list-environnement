@@ -83,7 +83,7 @@ jobs:
       - name: Deploy MariaDB with Helm
         shell: powershell
         run: |
-          helm upgrade --install mariadb ./mariadb `
+          helm upgrade --install mariadb ./my-app `
             --namespace database `
             --create-namespace `
             --wait `
