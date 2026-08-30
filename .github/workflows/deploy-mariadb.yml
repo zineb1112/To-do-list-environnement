@@ -114,7 +114,7 @@ jobs:
           helm upgrade --install loki grafana/loki-stack `
             --namespace logging `
             --create-namespace `
-            -f loki-values.yaml
+            -f monitoring/loki-values.yaml
 
       # ============================================================
       # 10. Deploy Application with Helm
