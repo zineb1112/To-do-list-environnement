@@ -104,9 +104,9 @@ jobs:
           kubectl cluster-info
 
       # ============================================================
-      # 9. Deploy Logging Stack (Loki + Promtail)
+      # 9. Deploy Logging Stack (Loki + Alloy + Grafana)
       # ============================================================
-      - name: Deploy Loki and Promtail Stack
+      - name: Deploy Loki, Alloy, and Grafana
         shell: powershell
         run: |
           helm repo add grafana https://grafana.github.io/helm-charts
@@ -114,7 +114,7 @@ jobs:
           helm upgrade --install loki grafana/loki-stack `
             --namespace logging `
             --create-namespace `
-            --set promtail.enabled=true
+            -f loki-values.yaml
 
       # ============================================================
       # 10. Deploy Application with Helm
