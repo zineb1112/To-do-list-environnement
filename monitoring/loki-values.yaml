@@ -1,0 +1,140 @@
+# 1. Grafana Setup & Auto-Dashboard Provisioning
+grafana:
+  enabled: true
+  adminPassword: "admin"
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'default'
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/default
+  dashboards:
+    default:
+      app-and-deployment-logs:
+        json: |
+          {
+            "annotations": { "list": [] },
+            "editable": true,
+            "title": "Application & Deployment Logging Dashboard",
+            "panels": [
+              {
+                "title": "GitHub Actions Deployment Logs",
+                "type": "logs",
+                "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+                "targets": [
+                  {
+                    "expr": "{job=\"github-actions\"}",
+                    "refId": "A"
+                  }
+                ]
+              },
+              {
+                "title": "Kubernetes Application Logs (MariaDB & Apps)",
+                "type": "logs",
+                "gridPos": { "h": 12, "w": 24, "x": 0, "y": 10 },
+                "targets": [
+                  {
+                    "expr": "{namespace=~\"database|default\"}",
+                    "refId": "B"
+                  }
+                ]
+              }
+            ],
+            "schemaVersion": 38,
+            "style": "dark",
+            "time": { "from": "now-1h", "to": "now" }
+          }
+
+# 2. Disable Promtail & Enable Grafana Alloy 
+promtail:
+  enabled: false
+
+alloy:
+  enabled: true
+  alloy:
+    configMap:
+      content: |
+        // Discover Kubernetes Pod Logs
+        discovery.kubernetes "pods" {
+          role = "pod"
+        }
+
+        // Relabel Pod Metadata to Loki Labels
+        discovery.relabel "pod_logs" {
+          targets = discovery.kubernetes.pods.targets
+
+          rule {
+            source_labels = ["__meta_kubernetes_namespace"]
+            target_label  = "namespace"
+          }
+          rule {
+            source_labels = ["__meta_kubernetes_pod_name"]
+            target_label  = "pod"
+          }
+          rule {
+            source_labels = ["__meta_kubernetes_pod_label_app"]
+            target_label  = "service"
+          }
+          rule {
+            replacement  = "production"
+            target_label = "environment"
+          }
+        }
+
+        // Collect Pod Logs
+        loki.source.kubernetes "pod_logs" {
+          targets    = discovery.relabel.pod_logs.output
+          forward_to = [loki.write.local.receiver]
+        }
+
+        // Forward Logs to Loki
+        loki.write "local" {
+          endpoint {
+            url = "http://loki:3100/loki/api/v1/push"
+          }
+        }
+
+# 3. Loki Configuration & Retention Policies 
+loki:
+  enabled: true
+  config:
+    limits_config:
+      retention_period: 168h
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+
+# 4. Alerting Rules for Failed Deployments & Errors 
+ruler:
+  enabled: true
+  alertmanager_url: ""
+  config:
+    rule_path: /tmp/scratch
+  rules:
+    deployment-alerts:
+      - alert: DeploymentFailureSpike
+        expr: sum(rate({job="github-actions", status="failure"}[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GitHub Actions deployment failed!"
+      - alert: ApplicationErrorSpike
+        expr: sum(rate({namespace="database"} |= "error" [5m])) > 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate detected in database namespace"
