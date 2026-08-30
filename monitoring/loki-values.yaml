@@ -103,13 +103,27 @@ alloy:
 # 3. Loki Configuration & Retention Policies 
 loki:
   enabled: true
+  isDefault: true
   config:
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+    common:
+      path_prefix: /data/loki
+      storage:
+        filesystem:
+          chunks_directory: /data/loki/chunks
+          rules_directory: /data/loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
     limits_config:
       retention_period: 168h
     schema_config:
       configs:
-        - from: 2024-01-01
-          store: tsdb
+        - from: 2020-05-15
+          store: boltdb-shipper
           object_store: filesystem
           schema: v11
           index:
