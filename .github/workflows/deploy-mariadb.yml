@@ -1,42 +1,34 @@
-name: Deploy MariaDB Ubuntu Cluster
+name: Deploy Infrastructure, Application, and Logging Stack
 
 on:
   push:
     branches:
       - main
-
   workflow_dispatch:
 
 jobs:
   build-and-deploy:
-
     runs-on: self-hosted
 
     steps:
-
       # ============================================================
       # 1. Checkout
       # ============================================================
-
       - name: Checkout Code
         uses: actions/checkout@v4
-
 
       # ============================================================
       # 2. Docker Hub Login
       # ============================================================
-
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: zineb1112
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-
       # ============================================================
       # 3. Build MariaDB Image
       # ============================================================
-
       - name: Build Custom MariaDB Image
         shell: powershell
         run: |
@@ -44,57 +36,135 @@ jobs:
             -t zineb1112/mariadbubuntu1:latest `
             ./mariadb
 
-
       # ============================================================
       # 4. Push Image
       # ============================================================
-
       - name: Push Image to Docker Hub
         shell: powershell
         run: |
           docker push zineb1112/mariadbubuntu1:latest
 
+      # ============================================================
+      # 5. Provision Infrastructure with Terraform
+      # ============================================================
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.0"
+
+      - name: Create Backups Directory
+        shell: powershell
+        run: |
+          if (!(Test-Path -Path "./backups")) {
+            New-Item -ItemType Directory -Path "./backups"
+          }
+
+      - name: Terraform Init
+        shell: powershell
+        run: terraform init
+
+      - name: Terraform Apply
+        shell: powershell
+        run: terraform apply -auto-approve
 
       # ============================================================
-      # 5. Configure Kubernetes
+      # 6. Verify Terraform Infrastructure
       # ============================================================
+      - name: Verify Terraform Infrastructure
+        shell: powershell
+        run: |
+          Write-Host "--- Checking Terraform State ---"
+          terraform show
 
+          Write-Host "--- Verifying Docker Containers ---"
+          docker ps --filter "name=MariaDBServer1" --filter "name=backend-api" --filter "name=frontend-service" --filter "name=bastion-bridge"
+
+          Write-Host "--- Verifying Custom Docker Networks ---"
+          docker network ls --filter "name=public-net" --filter "name=backend-net" --filter "name=db-net"
+
+      # ============================================================
+      # 7. Configure Kubernetes
+      # ============================================================
       - name: Configure Kubernetes Context
         shell: powershell
         run: |
           kubectl config use-context docker-desktop
           kubectl config current-context
 
-
       # ============================================================
-      # 6. Verify Kubernetes
+      # 8. Verify Kubernetes Cluster
       # ============================================================
-
-      - name: Verify Kubernetes
+      - name: Verify Kubernetes Cluster
         shell: powershell
         run: |
+          Write-Host "--- Checking Cluster Nodes ---"
           kubectl get nodes
 
+          Write-Host "--- Checking Cluster Health ---"
+          kubectl cluster-info
 
       # ============================================================
-      # 7. Deploy with Helm
+      # 9. Deploy Logging Stack (Loki + Promtail)
       # ============================================================
+      - name: Deploy Loki and Promtail Stack
+        shell: powershell
+        run: |
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
+          helm upgrade --install loki grafana/loki-stack `
+            --namespace logging `
+            --create-namespace `
+            --set promtail.enabled=true
 
-      - name: Deploy MariaDB with Helm
+      # ============================================================
+      # 10. Deploy Application with Helm
+      # ============================================================
+      - name: Deploy Application with Helm
         shell: powershell
         run: |
           helm upgrade --install mariadb ./my-app `
             --namespace database `
             --create-namespace
 
-
       # ============================================================
-      # 8. Verify Deployment
+      # 11. Verify Deployment
       # ============================================================
-
-      - name: Verify MariaDB
+      - name: Verify Deployment
         shell: powershell
         run: |
+          Write-Host "--- Checking Kubernetes Pods ---"
           kubectl get pods -n database
+
+          Write-Host "--- Checking Kubernetes Services ---"
           kubectl get svc -n database
+
+          Write-Host "--- Checking Persistent Volume Claims ---"
           kubectl get pvc -n database
+
+      # ============================================================
+      # 12. Ship Pipeline Logs to Loki
+      # ============================================================
+      - name: Send Deployment Log to Loki
+        if: always()
+        shell: powershell
+        run: |
+          $timestamp = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
+          $status = "${{ job.status }}"
+          $body = @{
+              streams = @(
+                  @{
+                      stream = @{
+                          job = "github-actions"
+                          environment = "production"
+                          workflow = "deploy-mariadb"
+                          status = "$status"
+                      }
+                      values = @(
+                          @("$timestamp", "GitHub Actions workflow run completed with status: $status")
+                      )
+                  }
+              )
+          } | ConvertTo-Json -Depth 5
+
+          kubectl run loki-log-pusher --rm -i --restart='Never' --image=curlimages/curl -- `
+            curl -s -H "Content-Type: application/json" -X POST "http://loki.logging.svc.cluster.local:3100/loki/api/v1/push" -d "$body"
