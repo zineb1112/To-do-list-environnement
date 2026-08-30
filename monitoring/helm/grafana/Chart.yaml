@@ -1,6 +1,0 @@
-apiVersion: v2
-name: monitoring-grafana
-description: Grafana dashboards and alerting for Loki monitoring
-type: application
-version: 1.0.0
-appVersion: "1.0"
