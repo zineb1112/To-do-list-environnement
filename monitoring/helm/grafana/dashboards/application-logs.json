@@ -1,0 +1,80 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": {"type": "loki", "uid": "loki"},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [
+        {"expr": "{namespace=~\"$namespace\", service=~\"$service\", container=~\"$container\"}", "refId": "A"}
+      ],
+      "title": "Application Logs",
+      "type": "logs",
+      "options": {
+        "deduplication": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLines": true
+      }
+    },
+    {
+      "datasource": {"type": "loki", "uid": "loki"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 10},
+      "id": 2,
+      "targets": [
+        {"expr": "sum by (service) (count_over_time({namespace=~\"$namespace\", service=~\"$service\"} |~ \"(?i)error|exception|fatal\" [5m]))", "legendFormat": "{{service}}", "refId": "A"}
+      ],
+      "title": "Errors - Last 5 Minutes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "loki", "uid": "loki"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 10},
+      "id": 3,
+      "targets": [
+        {"expr": "sum by (service) (count_over_time({namespace=~\"$namespace\", service=~\"$service\"} [5m]))", "legendFormat": "{{service}}", "refId": "A"}
+      ],
+      "title": "Log Volume",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "templating": {
+    "list": [
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": {"type": "loki", "uid": "loki"},
+        "query": "label_values(namespace)",
+        "current": {"text": "All", "value": "$__all"},
+        "includeAll": true,
+        "multi": true
+      },
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": {"type": "loki", "uid": "loki"},
+        "query": "label_values(service)",
+        "current": {"text": "All", "value": "$__all"},
+        "includeAll": true,
+        "multi": true
+      },
+      {
+        "name": "container",
+        "type": "query",
+        "datasource": {"type": "loki", "uid": "loki"},
+        "query": "label_values(container)",
+        "current": {"text": "All", "value": "$__all"},
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "title": "Application Logs",
+  "uid": "application-logs"
+}

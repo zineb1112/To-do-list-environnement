@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerting
+  namespace: {{ .Values.grafanaNamespace }}
+  labels:
+    grafana_alerting: "1"
+data:
+  alert-rules.yaml: |
+{{ .Files.Get "alerting/alert-rules.yaml" | indent 4 }}

@@ -1,0 +1,119 @@
+name: Deploy MariaDB Ubuntu Cluster
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'mariadb/**'
+
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+
+    runs-on: self-hosted
+
+    steps:
+
+<<<<<<< HEAD
+    - name: Log in to Docker Hub
+      run: docker login -u "zineb1112" -p "${{ secrets.DOCKER_PASSWORD }}"
+      shell: powershell
+=======
+      # ============================================================
+      # 1. Checkout
+      # ============================================================
+>>>>>>> 399e3d6 (Add automated MariaDB Helm deployment)
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+
+      # ============================================================
+      # 2. Docker Hub Login
+      # ============================================================
+
+      - name: Log in to Docker Hub
+        shell: powershell
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login `
+            -u "zineb1112" `
+            --password-stdin
+
+<<<<<<< HEAD
+    - name: Deploy MariaDB App
+      run: |
+        kubectl apply -f mariadb/mariadb-deployment.yml
+        kubectl rollout restart deployment/mariadb-deployment
+      shell: powershell
+=======
+
+      # ============================================================
+      # 3. Build MariaDB Image
+      # ============================================================
+
+      - name: Build Custom MariaDB Image
+        shell: powershell
+        run: |
+          docker build `
+            -t zineb1112/mariadbubuntu1:latest `
+            ./mariadb
+
+
+      # ============================================================
+      # 4. Push Image
+      # ============================================================
+
+      - name: Push Image to Docker Hub
+        shell: powershell
+        run: |
+          docker push zineb1112/mariadbubuntu1:latest
+
+
+      # ============================================================
+      # 5. Configure Kubernetes
+      # ============================================================
+
+      - name: Configure Kubernetes Context
+        shell: powershell
+        run: |
+          kubectl config use-context docker-desktop
+          kubectl config current-context
+
+
+      # ============================================================
+      # 6. Verify Kubernetes
+      # ============================================================
+
+      - name: Verify Kubernetes
+        shell: powershell
+        run: |
+          kubectl get nodes
+
+
+      # ============================================================
+      # 7. Deploy with Helm
+      # ============================================================
+
+      - name: Deploy MariaDB with Helm
+        shell: powershell
+        run: |
+          helm upgrade --install mariadb ./mariadb `
+            --namespace database `
+            --create-namespace `
+            --wait `
+            --timeout 5m
+
+
+      # ============================================================
+      # 8. Verify Deployment
+      # ============================================================
+
+      - name: Verify MariaDB
+        shell: powershell
+        run: |
+          kubectl get pods -n database
+          kubectl get svc -n database
+          kubectl get pvc -n database
+>>>>>>> 399e3d6 (Add automated MariaDB Helm deployment)

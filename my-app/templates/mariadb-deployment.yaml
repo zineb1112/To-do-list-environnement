@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-mariadb
+  labels:
+    {{- include "my-app.labels" . | nindent 4 }}
+    app: mariadb
+spec:
+  replicas: {{ .Values.mariadb.replicaCount }}
+  selector:
+    matchLabels:
+      app: mariadb
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: mariadb
+        release: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: mariadb
+          image: "{{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}"
+          imagePullPolicy: {{ .Values.mariadb.image.pullPolicy }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-mariadb
+                  key: MARIADB_ROOT_PASSWORD
+            - name: MARIADB_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-mariadb
+                  key: MARIADB_DATABASE
+          volumeMounts:
+            - name: mariadb-data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: mariadb-data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-mariadb

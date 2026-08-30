@@ -1,0 +1,43 @@
+# Default values for my-app.
+
+frontend:
+  replicaCount: 1
+  image:
+    repository: nginx
+    tag: alpine
+    pullPolicy: IfNotPresent
+  service:
+    type: NodePort
+    port: 80
+    nodePort: 30080
+  resources: {}
+
+backend:
+  replicaCount: 1
+  image:
+    repository: alpine
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  resources: {}
+
+mariadb:
+  replicaCount: 1
+  image:
+    repository: zineb1112/mariadbubuntu1
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 3306
+  database: appdb
+  rootPassword: "RootPassword123!"
+  storage:
+    size: 1Gi
+    storageClass: ""
+
+ingress:
+  enabled: true
+  className: nginx
+  host: my-app.local
+  path: /

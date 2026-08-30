@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mariadb-app
+  template:
+    metadata:
+      labels:
+        app: mariadb-app
+    spec:
+      containers:
+      - name: mariadb-server-1
+        image: zineb1112/mariadbubuntu1:latest  # Custom built image on DockerHub
+        imagePullPolicy: Always
+        env:
+        - name: MARIADB_ALLOW_EMPTY_ROOT_PASSWORD
+          value: "yes"
+        ports:
+        - containerPort: 3306
+          name: mariadb-port
+        # Mount the persistent storage inside this container path
+        volumeMounts:
+        - name: mariadb-persistent-storage
+          mountPath: /var/lib/mysql
+      volumes:
+      - name: mariadb-persistent-storage
+        persistentVolumeClaim:
+          claimName: mariadb-storage-claim
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb-service
+spec:
+  type: NodePort
+  ports:
+  - port: 3306
+    targetPort: 3306
+    nodePort: 30306  # Exposes the database locally on localhost:30306
+  selector:
+    app: mariadb-app

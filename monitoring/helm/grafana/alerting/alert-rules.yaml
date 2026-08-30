@@ -1,0 +1,79 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: Application Monitoring
+    folder: Loki Monitoring
+    interval: 1m
+    rules:
+      - uid: application-error-spike
+        title: Application Error Spike
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: loki
+            model:
+              expr: sum(count_over_time({namespace=~".+"} |~ "(?i)error|exception|fatal" [5m]))
+              queryType: range
+              refId: A
+          - refId: B
+            relativeTimeRange: {from: 0, to: 0}
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: sum
+              refId: B
+          - refId: C
+            relativeTimeRange: {from: 0, to: 0}
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {params: [10], type: gt}
+                  operator: {type: and}
+                  query: {params: [B]}
+                  reducer: {params: [], type: last}
+                  type: query
+              refId: C
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+
+      - uid: deployment-failed
+        title: Deployment Failed
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: loki
+            model:
+              expr: sum(count_over_time({deploymentId=~".+"} |~ "(?i)failed|failure|deployment.*error" [15m]))
+              queryType: range
+              refId: A
+          - refId: B
+            relativeTimeRange: {from: 0, to: 0}
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: sum
+              refId: B
+          - refId: C
+            relativeTimeRange: {from: 0, to: 0}
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {params: [0], type: gt}
+                  operator: {type: and}
+                  query: {params: [B]}
+                  reducer: {params: [], type: last}
+                  type: query
+              refId: C
+        noDataState: OK
+        execErrState: Error
+        for: 1m
