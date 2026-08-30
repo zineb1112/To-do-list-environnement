@@ -166,5 +166,13 @@ jobs:
               )
           } | ConvertTo-Json -Depth 5
 
-          kubectl run loki-log-pusher --rm -i --restart='Never' --image=curlimages/curl -- `
-            curl -s -H "Content-Type: application/json" -X POST "http://loki.logging.svc.cluster.local:3100/loki/api/v1/push" -d "$body"
+          # Start background port-forward to Loki service in 'logging' namespace
+          $pf = Start-Process kubectl -ArgumentList "port-forward -n logging svc/loki 3100:3100" -PassThru
+          Start-Sleep -Seconds 3
+
+          try {
+              Invoke-RestMethod -Uri "http://localhost:3100/loki/api/v1/push" -Method Post -ContentType "application/json" -Body $body
+              Write-Host "Logs successfully pushed to Loki."
+          } finally {
+              Stop-Process -Id $pf.Id -Force -ErrorAction SilentlyContinue
+          }
