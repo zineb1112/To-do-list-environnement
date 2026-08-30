@@ -106,7 +106,7 @@ jobs:
       # ============================================================
       # 9. Deploy Logging Stack (Loki + Alloy + Grafana)
       # ============================================================
-      - name: Deploy Loki, Alloy, and Grafana
+      - name: Deploy Loki, Alloy, Grafana
         shell: powershell
         run: |
           helm repo add grafana https://grafana.github.io/helm-charts
