@@ -16,15 +16,9 @@ jobs:
 
     steps:
 
-<<<<<<< HEAD
-    - name: Log in to Docker Hub
-      run: docker login -u "zineb1112" -p "${{ secrets.DOCKER_PASSWORD }}"
-      shell: powershell
-=======
       # ============================================================
       # 1. Checkout
       # ============================================================
->>>>>>> 399e3d6 (Add automated MariaDB Helm deployment)
 
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -41,13 +35,6 @@ jobs:
             -u "zineb1112" `
             --password-stdin
 
-<<<<<<< HEAD
-    - name: Deploy MariaDB App
-      run: |
-        kubectl apply -f mariadb/mariadb-deployment.yml
-        kubectl rollout restart deployment/mariadb-deployment
-      shell: powershell
-=======
 
       # ============================================================
       # 3. Build MariaDB Image
@@ -116,4 +103,3 @@ jobs:
           kubectl get pods -n database
           kubectl get svc -n database
           kubectl get pvc -n database
->>>>>>> 399e3d6 (Add automated MariaDB Helm deployment)
