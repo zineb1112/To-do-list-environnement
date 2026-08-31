@@ -147,6 +147,7 @@ jobs:
         if: always()
         shell: powershell
         run: |
+          $ErrorActionPreference = 'SilentlyContinue'
           $status = "${{ job.status }}"
           $timestamp = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
 
@@ -166,14 +167,10 @@ jobs:
               )
           } | ConvertTo-Json -Depth 5
 
-          # Find the actual service name for Loki dynamically
-          $svcName = (kubectl get svc -n logging -l "app.kubernetes.io/component=single-binary" -o jsonpath='{.items[0].metadata.name}' 2>$null)
-          if (-not $svcName) { $svcName = "loki" }
+          Write-Host "Starting port-forward to Loki service..."
 
-          Write-Host "Targeting service: $svcName in namespace logging"
-
-          # Start background port-forward
-          $pf = Start-Process kubectl -ArgumentList "port-forward -n logging svc/$svcName 3100:3100" -PassThru
+          # Start background port-forward directly targeting the loki service in logging namespace
+          $pf = Start-Process kubectl -ArgumentList "port-forward -n logging svc/loki 3100:3100" -PassThru
           
           # Wait up to 15 seconds for port 3100 to open
           $retries = 0
@@ -198,7 +195,7 @@ jobs:
               Write-Warning "Could not establish port-forward to Loki on 127.0.0.1:3100 within 15s."
           }
 
-          # Cleanup process
+          # Clean up background process safely
           if ($pf) {
               Stop-Process -Id $pf.Id -Force -ErrorAction SilentlyContinue
           }
