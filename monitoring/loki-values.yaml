@@ -68,49 +68,55 @@ promtail:
   enabled: false
 
 alloy:
-  enabled: true
-  alloy:
-    configMap:
-      content: |
-        // Discover Kubernetes Pod Logs
-        discovery.kubernetes "pods" {
-          role = "pod"
-        }
+  configMap:
+    content: |
+      // Discover Kubernetes Pod Logs
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
 
-        // Relabel Pod Metadata to Loki Labels
-        discovery.relabel "pod_logs" {
-          targets = discovery.kubernetes.pods.targets
+      // Relabel Pod Metadata to Loki Labels
+      discovery.relabel "pod_logs" {
+        targets = discovery.kubernetes.pods.targets
 
-          rule {
-            source_labels = ["__meta_kubernetes_namespace"]
-            target_label  = "namespace"
-          }
-          rule {
-            source_labels = ["__meta_kubernetes_pod_name"]
-            target_label  = "pod"
-          }
-          rule {
-            source_labels = ["__meta_kubernetes_pod_label_app"]
-            target_label  = "service"
-          }
-          rule {
-            replacement  = "production"
-            target_label = "environment"
-          }
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
         }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "service"
+        }
+        rule {
+          replacement  = "production"
+          target_label = "environment"
+        }
+        // Attach node log path so Alloy knows which log files to read
+        rule {
+          source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+          separator     = "/"
+          action        = "replace"
+          replacement   = "/var/log/pods/*$1/*.log"
+          target_label  = "__path__"
+        }
+      }
 
-        // Collect Pod Logs
-        loki.source.kubernetes "pod_logs" {
-          targets    = discovery.relabel.pod_logs.output
-          forward_to = [loki.write.local.receiver]
-        }
+      // Collect Pod Logs
+      loki.source.kubernetes "pod_logs" {
+        targets    = discovery.relabel.pod_logs.output
+        forward_to = [loki.write.local.receiver]
+      }
 
-        // Forward Logs to Loki
-        loki.write "local" {
-          endpoint {
-            url = "http://loki:3100/loki/api/v1/push"
-          }
+      // Forward Logs to Loki
+      loki.write "local" {
+        endpoint {
+          url = "http://loki:3100/loki/api/v1/push"
         }
+      }
 
 # 3. Loki Configuration & Retention Policies 
 loki:
