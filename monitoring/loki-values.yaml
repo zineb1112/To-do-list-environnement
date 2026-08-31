@@ -11,7 +11,7 @@ grafana:
         - name: Loki
           type: loki
           access: proxy
-          url: http://loki:3100
+          url: http://loki.logging.svc.cluster.local:3100
           isDefault: true
           editable: true
   dashboardProviders:
@@ -63,7 +63,7 @@ grafana:
             "time": { "from": "now-1h", "to": "now" }
           }
 
-# 2. Disable Promtail & Enable Grafana Alloy 
+# 2. Disable Promtail & Enable Grafana Alloy
 promtail:
   enabled: false
 
@@ -114,11 +114,11 @@ alloy:
       // Forward Logs to Loki
       loki.write "local" {
         endpoint {
-          url = "http://loki:3100/loki/api/v1/push"
+          url = "http://loki.logging.svc.cluster.local:3100/loki/api/v1/push"
         }
       }
 
-# 3. Loki Configuration & Retention Policies 
+# 3. Loki Configuration & Retention Policies
 loki:
   enabled: true
   isDefault: true
@@ -140,15 +140,15 @@ loki:
       retention_period: 168h
     schema_config:
       configs:
-        - from: 2020-05-15
-          store: boltdb-shipper
+        - from: "2024-01-01"
+          store: tsdb
           object_store: filesystem
-          schema: v11
+          schema: v13
           index:
             prefix: index_
             period: 24h
 
-# 4. Alerting Rules for Failed Deployments & Errors 
+# 4. Alerting Rules for Failed Deployments & Errors
 ruler:
   enabled: true
   alertmanager_url: ""
