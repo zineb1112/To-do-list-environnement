@@ -141,51 +141,62 @@ jobs:
           Write-Host "--- Checking Persistent Volume Claims ---"
           kubectl get pvc -n database
 
-      # ============================================================
-      # 12. Ship Pipeline Logs to Loki
-      # ============================================================
       - name: Send Deployment Log to Loki
         if: always()
         shell: powershell
         run: |
-          $timestamp = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
+          # 1. Format timestamp as a string to guarantee correct Loki JSON array encoding
+          $timestamp = [string][long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
           $status = "${{ job.status }}"
-          $body = @{
+          
+          $payload = @{
               streams = @(
                   @{
                       stream = @{
-                          job = "github-actions"
+                          job         = "github-actions"
                           environment = "production"
-                          workflow = "deploy-mariadb"
-                          status = "$status"
+                          workflow    = "deploy-mariadb"
+                          status      = "$status"
                       }
                       values = @(
-                          @("$timestamp", "GitHub Actions workflow run completed with status: $status")
+                          @($timestamp, "GitHub Actions workflow run completed with status: $status")
                       )
                   }
               )
-          } | ConvertTo-Json -Depth 5
+          } | ConvertTo-Json -Depth 10
 
-          # Start background port-forward to Loki service in 'logging' namespace
-          $pf = Start-Process kubectl -ArgumentList "port-forward -n logging svc/loki 3100:3100" -PassThru
-          
-          # Wait up to 15 seconds for port 3100 to become available
+          # 2. Spawn kubectl port-forward in background without redirecting stdout/stderr to file
+          $pf = Start-Process kubectl -ArgumentList "port-forward -n logging svc/loki 3100:3100" -PassThru -NoNewWindow
+
+          # 3. Poll Loki's HTTP health endpoint directly instead of raw TCP checks
+          $ready = $false
           $retries = 0
-          while ($retries -lt 15) {
-              if (Test-NetConnection -ComputerName "127.0.0.1" -Port 3100 -InformationLevel Quiet) {
-                  break
-              }
+          while (-not $ready -and $retries -lt 10) {
               Start-Sleep -Seconds 1
-              $retries++
+              try {
+                  $res = Invoke-WebRequest -Uri "http://127.0.0.1:3100/ready" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+                  if ($res.StatusCode -eq 200) { $ready = $true }
+              } catch {
+                  $retries++
+              }
           }
 
+          # 4. Push log payload to Loki
           try {
-              Invoke-RestMethod -Uri "http://127.0.0.1:3100/loki/api/v1/push" -Method Post -ContentType "application/json" -Body $body
-              Write-Host "Logs successfully pushed to Loki."
+              if ($ready) {
+                  Invoke-RestMethod -Uri "http://127.0.0.1:3100/loki/api/v1/push" `
+                                    -Method Post `
+                                    -ContentType "application/json" `
+                                    -Body $payload `
+                                    -TimeoutSec 10
+                  Write-Host "Logs successfully pushed to Loki."
+              } else {
+                  Write-Warning "Loki port-forward did not become ready in time."
+              }
           } catch {
               Write-Warning "Could not push logs to Loki: $_"
           } finally {
-              if ($pf) {
+              if ($pf -and -not $pf.HasExited) {
                   Stop-Process -Id $pf.Id -Force -ErrorAction SilentlyContinue
               }
           }
