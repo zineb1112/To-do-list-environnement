@@ -147,16 +147,17 @@ jobs:
         if: always()
         shell: powershell
         run: |
-          $timestamp = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
           $status = "${{ job.status }}"
+          $timestamp = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
+
           $body = @{
               streams = @(
                   @{
                       stream = @{
-                          job = "github-actions"
+                          job         = "github-actions"
                           environment = "production"
-                          workflow = "deploy-mariadb"
-                          status = "$status"
+                          workflow    = "deploy-mariadb"
+                          status      = "$status"
                       }
                       values = @(
                           @("$timestamp", "GitHub Actions workflow run completed with status: $status")
@@ -165,26 +166,39 @@ jobs:
               )
           } | ConvertTo-Json -Depth 5
 
-          # Start background port-forward to Loki service in 'logging' namespace
-          $pf = Start-Process kubectl -ArgumentList "port-forward -n logging svc/loki 3100:3100" -PassThru
+          # Find the actual service name for Loki dynamically
+          $svcName = (kubectl get svc -n logging -l "app.kubernetes.io/component=single-binary" -o jsonpath='{.items[0].metadata.name}' 2>$null)
+          if (-not $svcName) { $svcName = "loki" }
+
+          Write-Host "Targeting service: $svcName in namespace logging"
+
+          # Start background port-forward
+          $pf = Start-Process kubectl -ArgumentList "port-forward -n logging svc/$svcName 3100:3100" -PassThru
           
-          # Wait up to 15 seconds for port 3100 to become available
+          # Wait up to 15 seconds for port 3100 to open
           $retries = 0
+          $connected = $false
           while ($retries -lt 15) {
               if (Test-NetConnection -ComputerName "127.0.0.1" -Port 3100 -InformationLevel Quiet) {
+                  $connected = $true
                   break
               }
               Start-Sleep -Seconds 1
               $retries++
           }
 
-          try {
-              Invoke-RestMethod -Uri "http://127.0.0.1:3100/loki/api/v1/push" -Method Post -ContentType "application/json" -Body $body
-              Write-Host "Logs successfully pushed to Loki."
-          } catch {
-              Write-Warning "Could not push logs to Loki: $_"
-          } finally {
-              if ($pf) {
-                  Stop-Process -Id $pf.Id -Force -ErrorAction SilentlyContinue
+          if ($connected) {
+              try {
+                  Invoke-RestMethod -Uri "http://127.0.0.1:3100/loki/api/v1/push" -Method Post -ContentType "application/json" -Body $body
+                  Write-Host "Logs successfully pushed to Loki."
+              } catch {
+                  Write-Warning "Failed to push logs to Loki API: $_"
               }
+          } else {
+              Write-Warning "Could not establish port-forward to Loki on 127.0.0.1:3100 within 15s."
+          }
+
+          # Cleanup process
+          if ($pf) {
+              Stop-Process -Id $pf.Id -Force -ErrorAction SilentlyContinue
           }
