@@ -141,7 +141,7 @@ jobs:
           Write-Host "--- Checking Persistent Volume Claims ---"
           kubectl get pvc -n database
 
-      # # # ============================================================
+      # # # # ============================================================
       # 12. Ship Pipeline Logs Directly to Loki via In-Cluster Job
       # ============================================================
       - name: Send Deployment Log to Loki
@@ -151,10 +151,16 @@ jobs:
           $status = "${{ job.status }}"
           $timestamp = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
 
-          # Clean up any previous log-pusher job
+          # Clean up any existing job
           kubectl delete job loki-log-pusher -n logging --ignore-not-found
 
-          # Apply inline Kubernetes Job that posts directly to Loki internal DNS
+          # Dynamically detect Loki service name in logging namespace
+          $lokiSvc = (kubectl get svc -n logging -l "app=loki" -o jsonpath="{.items[0].metadata.name}")
+          if (-not $lokiSvc) { $lokiSvc = "loki" }
+
+          Write-Host "Targeting Loki service: ${lokiSvc}.logging.svc.cluster.local:3100"
+
+          # Apply inline Kubernetes Job
           $jobManifest = @"
           apiVersion: batch/v1
           kind: Job
@@ -163,18 +169,19 @@ jobs:
             namespace: logging
           spec:
             ttlSecondsAfterFinished: 30
+            backoffLimit: 2
             template:
               spec:
-                restartPolicy: Never
+                restartPolicy: OnFailure
                 containers:
                 - name: pusher
-                  image: curlimages/curl
+                  image: curlimages/curl:latest
                   command: ["curl"]
                   args:
                   - "-s"
                   - "-X"
                   - "POST"
-                  - "http://loki.logging.svc.cluster.local:3100/loki/api/v1/push"
+                  - "http://${lokiSvc}.logging.svc.cluster.local:3100/loki/api/v1/push"
                   - "-H"
                   - "Content-Type: application/json"
                   - "-d"
@@ -183,6 +190,6 @@ jobs:
 
           $jobManifest | kubectl apply -f -
 
-          # Wait for the job to complete successfully
+          # Wait up to 60 seconds for completion
           Write-Host "Waiting for log pusher job to complete..."
-          kubectl wait --for=condition=complete job/loki-log-pusher -n logging --timeout=30s
+          kubectl wait --for=condition=complete job/loki-log-pusher -n logging --timeout=60s
