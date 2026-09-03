@@ -141,8 +141,8 @@ jobs:
           Write-Host "--- Checking Persistent Volume Claims ---"
           kubectl get pvc -n database
 
-      # # # # # # ============================================================
-      # 12. Ship Pipeline Logs Directly to Loki via Transient Pod
+      # # # # # # # ============================================================
+      # 12. Ship Pipeline Logs Directly to Loki via Pod Execution
       # ============================================================
       - name: Send Deployment Log to Loki
         if: always()
@@ -154,19 +154,19 @@ jobs:
           # Clean up existing pusher pod if leftover
           kubectl delete pod loki-log-pusher -n logging --ignore-not-found --now
 
-          # Dynamically get Loki Service Name & Port
+          # Dynamically resolve Loki Service Name & Port
           $lokiSvc = (kubectl get svc -n logging -l "app=loki" -o jsonpath="{.items[0].metadata.name}")
           if (-not $lokiSvc) { $lokiSvc = "loki" }
 
           $lokiPort = (kubectl get svc $lokiSvc -n logging -o jsonpath="{.spec.ports[0].port}")
-          if (-not $lokiPort) { $lokiPort = "3100" }
+          if (-not $lokiPort) { $lokiPort = "80" }
 
           Write-Host "Targeting Loki endpoint: http://${lokiSvc}.logging.svc.cluster.local:${lokiPort}/loki/api/v1/push"
 
           # Construct clean JSON payload
           $json = '{"streams":[{"stream":{"job":"github-actions","workflow":"deploy-mariadb","status":"' + $status + '"},"values":[["' + $timestamp + '","Workflow run finished with status: ' + $status + '"]]}]}'
 
-          # Launch interactive single-run pod
+          # Launch interactive single-run pod hitting the service port
           kubectl run loki-log-pusher -n logging `
             --image=curlimages/curl:latest `
             --restart=Never `
@@ -174,7 +174,7 @@ jobs:
             -H "Content-Type: application/json" `
             -d "$json"
 
-          # Wait up to 45s for completion
+          # Wait for pod completion
           Write-Host "Waiting for log pusher pod to complete..."
           $success = $false
           for ($i = 0; $i -lt 15; $i++) {
@@ -188,11 +188,11 @@ jobs:
               }
           }
 
-          # Print execution output from container
+          # Output execution log
           Write-Host "--- Container Output ---"
           kubectl logs loki-log-pusher -n logging
 
-          # Delete transient pod
+          # Clean up transient pod
           kubectl delete pod loki-log-pusher -n logging --ignore-not-found
 
           if (-not $success) {
