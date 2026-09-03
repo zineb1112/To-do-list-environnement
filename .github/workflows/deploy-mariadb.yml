@@ -141,8 +141,8 @@ jobs:
           Write-Host "--- Checking Persistent Volume Claims ---"
           kubectl get pvc -n database
 
-      # # # # # # # ============================================================
-      # 12. Ship Pipeline Logs Directly to Loki via Pod Execution
+      # # # # # # # # ============================================================
+      # 12. Ship Pipeline Logs Directly to Loki via In-Cluster Pod
       # ============================================================
       - name: Send Deployment Log to Loki
         if: always()
@@ -151,13 +151,14 @@ jobs:
           $status = "${{ job.status }}"
           $timestamp = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
 
-          # Clean up existing pusher pod if leftover
+          # Clean up transient pod if left over
           kubectl delete pod loki-log-pusher -n logging --ignore-not-found --now
 
-          # Dynamically resolve Loki Service Name & Port
-          $lokiSvc = (kubectl get svc -n logging -l "app=loki" -o jsonpath="{.items[0].metadata.name}")
+          # Retrieve exact Loki service name in logging namespace
+          $lokiSvc = (kubectl get svc -n logging -l "app.kubernetes.io/name=loki" -o jsonpath="{.items[0].metadata.name}")
           if (-not $lokiSvc) { $lokiSvc = "loki" }
 
+          # Detect service port or default to 80 for loki-stack
           $lokiPort = (kubectl get svc $lokiSvc -n logging -o jsonpath="{.spec.ports[0].port}")
           if (-not $lokiPort) { $lokiPort = "80" }
 
@@ -166,7 +167,7 @@ jobs:
           # Construct clean JSON payload
           $json = '{"streams":[{"stream":{"job":"github-actions","workflow":"deploy-mariadb","status":"' + $status + '"},"values":[["' + $timestamp + '","Workflow run finished with status: ' + $status + '"]]}]}'
 
-          # Launch interactive single-run pod hitting the service port
+          # Launch single-run pod hitting the service port
           kubectl run loki-log-pusher -n logging `
             --image=curlimages/curl:latest `
             --restart=Never `
