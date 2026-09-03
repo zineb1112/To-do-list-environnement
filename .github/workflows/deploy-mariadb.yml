@@ -103,7 +103,7 @@ jobs:
           Write-Host "--- Checking Cluster Health ---"
           kubectl cluster-info
 
-      # ============================================================
+      # # ============================================================
       # 9. Deploy Logging Stack (Loki + Alloy + Grafana)
       # ============================================================
       - name: Deploy Loki, Alloy, Grafana
@@ -111,10 +111,26 @@ jobs:
         run: |
           helm repo add grafana https://grafana.github.io/helm-charts
           helm repo update
+
+          # Auto-recovery: If loki-0 is stuck crashing, remove broken statefulsets/pods to reset permissions
+          $lokiPod = kubectl get pod loki-0 -n logging -o jsonpath='{.status.phase}' 2>$null
+          if ($lokiPod -and $lokiPod -ne "Running") {
+            Write-Host "⚠️ Loki pod in unhealthy state ($lokiPod). Cleaning up existing release..."
+            helm uninstall loki -n logging --wait 2>$null
+            kubectl delete pod loki-0 -n logging --force --grace-period=0 2>$null
+          }
+
+          # Deploy / Upgrade Helm Release
           helm upgrade --install loki grafana/loki-stack `
             --namespace logging `
             --create-namespace `
-            -f monitoring/loki-values.yaml
+            -f monitoring/loki-values.yaml `
+            --set loki.podSecurityContext.fsGroup=10001 `
+            --set loki.podSecurityContext.runAsUser=10001
+
+          # Wait automatically until Loki pod is 1/1 Running and Ready
+          Write-Host "Waiting for Loki StatefulSet to roll out completely..."
+          kubectl rollout status statefulset/loki -n logging --timeout=120s
 
       # ============================================================
       # 10. Deploy Application with Helm
@@ -141,7 +157,7 @@ jobs:
           Write-Host "--- Checking Persistent Volume Claims ---"
           kubectl get pvc -n database
 
-      # # # # # # # # # # ============================================================
+      # ============================================================
       # 12. Ship Pipeline Logs Directly to Loki via In-Cluster Pod
       # ============================================================
       - name: Send Deployment Log to Loki
@@ -151,26 +167,23 @@ jobs:
           $status = "${{ job.status }}"
           $timestamp = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
 
-          # Clean up transient pod if left over
+          # Ensure Loki pod is ready to accept HTTP connections
+          kubectl wait --namespace logging --for=condition=ready pod/loki-0 --timeout=60s
+
+          # Clean up transient pusher pod if left over
           kubectl delete pod loki-log-pusher -n logging --ignore-not-found --now
 
-          # Retrieve service names in logging namespace safely
-          $allSvcs = kubectl get svc -n logging -o jsonpath="{.items[*].metadata.name}"
-          $lokiSvc = ($allSvcs -split '\s+' | Select-String "loki" | Select-Object -First 1).ToString().Trim()
-
-          if (-not $lokiSvc) { $lokiSvc = "loki" }
-
-          # Detect target service port directly from Kubernetes
-          $lokiPort = (kubectl get svc $lokiSvc -n logging -o jsonpath="{.spec.ports[0].port}")
+          # Automatically resolve Loki service target
+          $lokiSvc = "loki"
+          $lokiPort = (kubectl get svc $lokiSvc -n logging -o jsonpath="{.spec.ports[0].port}" 2>$null)
           if (-not $lokiPort) { $lokiPort = "3100" }
 
-          Write-Host "Discovered Loki Service: $lokiSvc on port $lokiPort"
           Write-Host "Targeting Loki endpoint: http://${lokiSvc}.logging.svc.cluster.local:${lokiPort}/loki/api/v1/push"
 
           # Construct JSON payload string
           $json = '{"streams":[{"stream":{"job":"github-actions","workflow":"deploy-mariadb","status":"' + $status + '"},"values":[["' + $timestamp + '","Workflow run finished with status: ' + $status + '"]]}]}'
 
-          # Run transient pod to push log
+          # Execute transient log-pusher pod
           kubectl run loki-log-pusher -n logging `
             --image=curlimages/curl:latest `
             --restart=Never `
@@ -178,7 +191,7 @@ jobs:
             -H "Content-Type: application/json" `
             -d "$json"
 
-          # Wait for execution
+          # Monitor pusher execution
           Write-Host "Waiting for log pusher pod to complete..."
           $success = $false
           for ($i = 0; $i -lt 15; $i++) {
@@ -192,9 +205,9 @@ jobs:
               }
           }
 
-          # Output execution details
+          # Output logs
           Write-Host "--- Container Output ---"
-          kubectl logs loki-log-pusher -n logging
+          kubectl logs loki-log-pusher -n logging 2>$null
 
           # Clean up transient pod
           kubectl delete pod loki-log-pusher -n logging --ignore-not-found
