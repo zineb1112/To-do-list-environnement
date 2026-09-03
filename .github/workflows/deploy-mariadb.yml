@@ -141,8 +141,8 @@ jobs:
           Write-Host "--- Checking Persistent Volume Claims ---"
           kubectl get pvc -n database
 
-      # # ============================================================
-      # 12. Ship Pipeline Logs Directly to Loki via Native PowerShell
+      # # # ============================================================
+      # 12. Ship Pipeline Logs Directly to Loki via In-Cluster Job
       # ============================================================
       - name: Send Deployment Log to Loki
         if: always()
@@ -151,60 +151,38 @@ jobs:
           $status = "${{ job.status }}"
           $timestamp = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
 
-          # Build JSON payload
-          $body = @{
-              streams = @(
-                  @{
-                      stream = @{
-                          job         = "github-actions"
-                          environment = "production"
-                          workflow    = "deploy-mariadb"
-                          status      = "$status"
-                      }
-                      values = @(
-                          @("$timestamp", "GitHub Actions workflow run completed with status: $status")
-                      )
-                  }
-              )
-          } | ConvertTo-Json -Depth 5
+          # Clean up any previous log-pusher job
+          kubectl delete job loki-log-pusher -n logging --ignore-not-found
 
-          Write-Host "Establishing port-forward to Loki..."
+          # Apply inline Kubernetes Job that posts directly to Loki internal DNS
+          $jobManifest = @"
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: loki-log-pusher
+            namespace: logging
+          spec:
+            ttlSecondsAfterFinished: 30
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                - name: pusher
+                  image: curlimages/curl
+                  command: ["curl"]
+                  args:
+                  - "-s"
+                  - "-X"
+                  - "POST"
+                  - "http://loki.logging.svc.cluster.local:3100/loki/api/v1/push"
+                  - "-H"
+                  - "Content-Type: application/json"
+                  - "-d"
+                  - '{"streams":[{"stream":{"job":"github-actions","environment":"production","workflow":"deploy-mariadb","status":"$status"},"values":[["$timestamp","GitHub Actions workflow run completed with status: $status"]]}]}'
+          "@
 
-          # Dynamically get Loki service name
-          $lokiSvc = (kubectl get svc -n logging -l "app=loki" -o jsonpath="{.items[0].metadata.name}")
-          if (-not $lokiSvc) { $lokiSvc = "loki" }
+          $jobManifest | kubectl apply -f -
 
-          # Start background port-forward
-          $job = Start-Job -ScriptBlock {
-              param($svc)
-              kubectl port-forward -n logging "svc/$svc" 3100:3100
-          } -ArgumentList $lokiSvc
-
-          # Wait up to 10s for port 3100 to open
-          $connected = $false
-          for ($i = 0; $i -lt 10; $i++) {
-              if (Test-NetConnection -ComputerName "127.0.0.1" -Port 3100 -InformationLevel Quiet) {
-                  $connected = $true
-                  break
-              }
-              Start-Sleep -Seconds 1
-          }
-
-          if ($connected) {
-              try {
-                  $response = Invoke-RestMethod -Uri "http://127.0.0.1:3100/loki/api/v1/push" `
-                    -Method Post `
-                    -ContentType "application/json" `
-                    -Body $body
-
-                  Write-Host "✅ Logs successfully pushed to Loki!"
-              } catch {
-                  Write-Error "Failed to push logs to Loki API: $_"
-              }
-          } else {
-              Write-Error "Could not connect to Loki on 127.0.0.1:3100 within 10 seconds."
-          }
-
-          # Always stop background port-forward job
-          Stop-Job $job -ErrorAction SilentlyContinue
-          Remove-Job $job -ErrorAction SilentlyContinue
+          # Wait for the job to complete successfully
+          Write-Host "Waiting for log pusher job to complete..."
+          kubectl wait --for=condition=complete job/loki-log-pusher -n logging --timeout=30s
