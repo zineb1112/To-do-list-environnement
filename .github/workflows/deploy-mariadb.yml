@@ -141,7 +141,8 @@ jobs:
           Write-Host "--- Checking Persistent Volume Claims ---"
           kubectl get pvc -n database
 
-      #12. Ship Pipeline Logs Directly to Loki via In-Cluster Pod
+      # ============================================================
+      # 12. Ship Pipeline Logs Directly to Loki via ConfigMap
       # ============================================================
       - name: Send Deployment Log to Loki
         if: always()
@@ -150,6 +151,7 @@ jobs:
           $status = "${{ job.status }}"
           $timestamp = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
 
+          # Build structured JSON payload
           $jsonPayload = @{
               streams = @(
                   @{
@@ -166,16 +168,24 @@ jobs:
               )
           } | ConvertTo-Json -Depth 5 -Compress
 
-          # Escape JSON for command inline execution
-          $escapedPayload = $jsonPayload.Replace('"', '\"')
+          # Save to local file
+          $jsonPayload | Out-File -FilePath "./payload.json" -Encoding ascii
 
-          # Determine exact internal Loki service address dynamically
-          $lokiSvc = (kubectl get svc -n logging -l "app=loki" -o jsonpath="{.items[0].metadata.name}")
-          if (-not $lokiSvc) { $lokiSvc = "loki" }
+          try {
+              # Create temporary ConfigMap in logging namespace with the JSON file
+              kubectl create configmap loki-log-payload --from-file=payload.json=./payload.json -n logging --dry-run=client -o yaml | kubectl apply -f -
 
-          Write-Host "Sending deployment log to Loki service ($lokiSvc)..."
+              # Run curl pod mounting the JSON file from ConfigMap
+              kubectl run loki-log-pusher -n logging --image=curlimages/curl --restart=Never --rm -i -- `
+                curl -s -X POST "http://loki.logging.svc.cluster.local:3100/loki/api/v1/push" `
+                -H "Content-Type: application/json" `
+                -d "@/etc/payload/payload.json"
 
-          kubectl run loki-log-pusher --namespace logging --image=curlimages/curl --restart=Never --rm -i -- `
-            curl -s -X POST "http://${lokiSvc}.logging.svc.cluster.local:3100/loki/api/v1/push" `
-            -H "Content-Type: application/json" `
-            -d "$escapedPayload"
+              Write-Host "Logs successfully pushed to Loki."
+          } catch {
+              Write-Warning "Failed to push logs to Loki: $_"
+          } finally {
+              # Clean up temporary local file and Kubernetes ConfigMap
+              Remove-Item -Path "./payload.json" -ErrorAction SilentlyContinue
+              kubectl delete configmap loki-log-payload -n logging --ignore-not-found
+          }
