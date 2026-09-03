@@ -103,25 +103,27 @@ jobs:
           Write-Host "--- Checking Cluster Health ---"
           kubectl cluster-info
 
-      # # # ============================================================
+      # ============================================================
       # 9. Deploy Logging Stack (Loki + Alloy + Grafana)
       # ============================================================
       - name: Deploy Loki, Alloy, Grafana
         shell: powershell
         run: |
+          $ErrorActionPreference = "Continue"
+
           helm repo add grafana https://grafana.github.io/helm-charts
           helm repo update
 
-          # Auto-recovery: Detect crashed Loki pod and purge broken storage & release
+          # Auto-recovery: Detect broken Loki pod and purge release cleanly
           $lokiReady = kubectl get pod loki-0 -n logging -o jsonpath='{.status.containerStatuses[0].ready}' 2>$null
           if ($lokiReady -ne "true") {
-            Write-Host "⚠️ Loki is not ready. Performing deep cleanup of release and PVCs..."
-            helm uninstall loki -n logging --wait 2>$null
-            kubectl delete statefulset loki -n logging --ignore-not-found 2>$null
-            kubectl delete pvc -l app=loki -n logging --ignore-not-found 2>$null
-            kubectl delete pvc -l app.kubernetes.io/name=loki -n logging --ignore-not-found 2>$null
-            kubectl delete pod loki-0 -n logging --force --grace-period=0 2>$null
-            Start-Sleep -Seconds 5
+            Write-Host "⚠️ Loki is not ready. Resetting release state..."
+            helm uninstall loki -n logging --wait 2>&1 | Out-Null
+            kubectl delete statefulset loki -n logging --ignore-not-found 2>&1 | Out-Null
+            kubectl delete pvc -l app=loki -n logging --ignore-not-found 2>&1 | Out-Null
+            kubectl delete pvc -l app.kubernetes.io/name=loki -n logging --ignore-not-found 2>&1 | Out-Null
+            kubectl delete pod loki-0 -n logging --ignore-not-found --grace-period=0 2>&1 | Out-Null
+            Start-Sleep -Seconds 3
           }
 
           # Deploy Helm release disabling persistent storage to avoid local volume permission crashes
@@ -168,16 +170,24 @@ jobs:
         if: always()
         shell: powershell
         run: |
+          $ErrorActionPreference = "Continue"
+
           $status = "${{ job.status }}"
           $timestamp = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
 
+          # Verify Loki service exists before attempting push
+          $lokiSvcExists = kubectl get svc loki -n logging --ignore-not-found -o name
+          if (-not $lokiSvcExists) {
+              Write-Host "⚠️ Loki service not found in 'logging' namespace. Skipping log push."
+              exit 0
+          }
+
           # Ensure Loki pod is ready to accept HTTP connections
-          kubectl wait --namespace logging --for=condition=ready pod/loki-0 --timeout=60s
+          kubectl wait --namespace logging --for=condition=ready pod/loki-0 --timeout=30s 2>&1 | Out-Null
 
           # Clean up transient pusher pod if left over
-          kubectl delete pod loki-log-pusher -n logging --ignore-not-found --now
+          kubectl delete pod loki-log-pusher -n logging --ignore-not-found 2>&1 | Out-Null
 
-          # Automatically resolve Loki service target
           $lokiSvc = "loki"
           $lokiPort = (kubectl get svc $lokiSvc -n logging -o jsonpath="{.spec.ports[0].port}" 2>$null)
           if (-not $lokiPort) { $lokiPort = "3100" }
@@ -214,7 +224,7 @@ jobs:
           kubectl logs loki-log-pusher -n logging 2>$null
 
           # Clean up transient pod
-          kubectl delete pod loki-log-pusher -n logging --ignore-not-found
+          kubectl delete pod loki-log-pusher -n logging --ignore-not-found 2>&1 | Out-Null
 
           if (-not $success) {
               Write-Error "Failed to send logs to Loki. Review container output above."
