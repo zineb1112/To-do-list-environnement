@@ -141,8 +141,8 @@ jobs:
           Write-Host "--- Checking Persistent Volume Claims ---"
           kubectl get pvc -n database
 
-      # # # # # ============================================================
-      # 12. Ship Pipeline Logs Directly to Loki via Pod Execution
+      # # # # # # ============================================================
+      # 12. Ship Pipeline Logs Directly to Loki via Transient Pod
       # ============================================================
       - name: Send Deployment Log to Loki
         if: always()
@@ -151,51 +151,52 @@ jobs:
           $status = "${{ job.status }}"
           $timestamp = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
 
-          # Remove existing pod if present
+          # Clean up existing pusher pod if leftover
           kubectl delete pod loki-log-pusher -n logging --ignore-not-found --now
 
-          # Detect Loki service name and port
+          # Dynamically get Loki Service Name & Port
           $lokiSvc = (kubectl get svc -n logging -l "app=loki" -o jsonpath="{.items[0].metadata.name}")
           if (-not $lokiSvc) { $lokiSvc = "loki" }
 
           $lokiPort = (kubectl get svc $lokiSvc -n logging -o jsonpath="{.spec.ports[0].port}")
           if (-not $lokiPort) { $lokiPort = "3100" }
 
-          Write-Host "Targeting Loki: http://${lokiSvc}.logging.svc.cluster.local:${lokiPort}/loki/api/v1/push"
+          Write-Host "Targeting Loki endpoint: http://${lokiSvc}.logging.svc.cluster.local:${lokiPort}/loki/api/v1/push"
 
-          $payload = '{"streams":[{"stream":{"job":"github-actions","environment":"production","workflow":"deploy-mariadb","status":"' + $status + '"},"values":[["' + $timestamp + '","GitHub Actions workflow run completed with status: ' + $status + '"]]}]}'
+          # Construct clean JSON payload
+          $json = '{"streams":[{"stream":{"job":"github-actions","workflow":"deploy-mariadb","status":"' + $status + '"},"values":[["' + $timestamp + '","Workflow run finished with status: ' + $status + '"]]}]}'
 
-          # Launch pod to perform curl request
+          # Launch interactive single-run pod
           kubectl run loki-log-pusher -n logging `
             --image=curlimages/curl:latest `
             --restart=Never `
-            -- command curl -s -X POST "http://${lokiSvc}.logging.svc.cluster.local:${lokiPort}/loki/api/v1/push" `
+            -- curl -s -v -X POST "http://${lokiSvc}.logging.svc.cluster.local:${lokiPort}/loki/api/v1/push" `
             -H "Content-Type: application/json" `
-            -d "$payload"
+            -d "$json"
 
-          # Wait up to 60s for pod completion
-          Write-Host "Waiting for log push to finish..."
-          $completed = $false
-          for ($i = 0; $i -lt 30; $i++) {
-              $phase = (kubectl get pod loki-log-pusher -n logging -o jsonpath="{.status.phase}")
+          # Wait up to 45s for completion
+          Write-Host "Waiting for log pusher pod to complete..."
+          $success = $false
+          for ($i = 0; $i -lt 15; $i++) {
+              Start-Sleep -Seconds 3
+              $phase = (kubectl get pod loki-log-pusher -n logging -o jsonpath="{.status.phase}" 2>$null)
               if ($phase -eq "Succeeded") {
-                  $completed = $true
+                  $success = $true
                   break
               } elseif ($phase -eq "Failed") {
                   break
               }
-              Start-Sleep -Seconds 2
           }
 
-          # Output logs from the pusher pod for debugging
-          Write-Host "--- Pusher Pod Output ---"
+          # Print execution output from container
+          Write-Host "--- Container Output ---"
           kubectl logs loki-log-pusher -n logging
 
-          # Clean up pod
+          # Delete transient pod
           kubectl delete pod loki-log-pusher -n logging --ignore-not-found
 
-          if (-not $completed) {
-              Write-Error "Failed to push logs to Loki. Check pod output above."
+          if (-not $success) {
+              Write-Error "Failed to send logs to Loki. Review container output above."
           } else {
               Write-Host "✅ Logs successfully pushed to Loki!"
           }
