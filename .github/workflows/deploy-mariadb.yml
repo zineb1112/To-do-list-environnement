@@ -141,7 +141,7 @@ jobs:
           Write-Host "--- Checking Persistent Volume Claims ---"
           kubectl get pvc -n database
 
-      # # # # # # # # # ============================================================
+      # # # # # # # # # # ============================================================
       # 12. Ship Pipeline Logs Directly to Loki via In-Cluster Pod
       # ============================================================
       - name: Send Deployment Log to Loki
@@ -154,10 +154,11 @@ jobs:
           # Clean up transient pod if left over
           kubectl delete pod loki-log-pusher -n logging --ignore-not-found --now
 
-          # Dynamically detect service name containing 'loki'
-          $lokiSvc = (kubectl get svc -n logging -o jsonpath='{.items[?(@.metadata.name != "")].metadata.name}' | Write-Output) -split '\s+' | Select-String "loki" | Select-Object -First 1
+          # Retrieve service names in logging namespace safely
+          $allSvcs = kubectl get svc -n logging -o jsonpath="{.items[*].metadata.name}"
+          $lokiSvc = ($allSvcs -split '\s+' | Select-String "loki" | Select-Object -First 1).ToString().Trim()
 
-          if (-not $lokiSvc) { $lokiSvc = "loki-stack" }
+          if (-not $lokiSvc) { $lokiSvc = "loki" }
 
           # Detect target service port directly from Kubernetes
           $lokiPort = (kubectl get svc $lokiSvc -n logging -o jsonpath="{.spec.ports[0].port}")
@@ -166,10 +167,10 @@ jobs:
           Write-Host "Discovered Loki Service: $lokiSvc on port $lokiPort"
           Write-Host "Targeting Loki endpoint: http://${lokiSvc}.logging.svc.cluster.local:${lokiPort}/loki/api/v1/push"
 
-          # Clean JSON payload string
+          # Construct JSON payload string
           $json = '{"streams":[{"stream":{"job":"github-actions","workflow":"deploy-mariadb","status":"' + $status + '"},"values":[["' + $timestamp + '","Workflow run finished with status: ' + $status + '"]]}]}'
 
-          # Run transient pod
+          # Run transient pod to push log
           kubectl run loki-log-pusher -n logging `
             --image=curlimages/curl:latest `
             --restart=Never `
@@ -195,7 +196,7 @@ jobs:
           Write-Host "--- Container Output ---"
           kubectl logs loki-log-pusher -n logging
 
-          # Clean up
+          # Clean up transient pod
           kubectl delete pod loki-log-pusher -n logging --ignore-not-found
 
           if (-not $success) {
