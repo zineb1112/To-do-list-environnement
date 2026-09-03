@@ -141,17 +141,16 @@ jobs:
           Write-Host "--- Checking Persistent Volume Claims ---"
           kubectl get pvc -n database
 
-      # 12. Ship Pipeline Logs to Loki
+      12. Ship Pipeline Logs Directly to Loki via In-Cluster Pod
       # ============================================================
       - name: Send Deployment Log to Loki
         if: always()
         shell: powershell
         run: |
-          $ErrorActionPreference = 'SilentlyContinue'
           $status = "${{ job.status }}"
           $timestamp = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds * 1000000
 
-          $body = @{
+          $jsonPayload = @{
               streams = @(
                   @{
                       stream = @{
@@ -165,37 +164,18 @@ jobs:
                       )
                   }
               )
-          } | ConvertTo-Json -Depth 5
+          } | ConvertTo-Json -Depth 5 -Compress
 
-          Write-Host "Starting port-forward to Loki service..."
+          # Escape JSON for command inline execution
+          $escapedPayload = $jsonPayload.Replace('"', '\"')
 
-          # Start background port-forward directly targeting the loki service in logging namespace
-          $pf = Start-Process kubectl -ArgumentList "port-forward -n logging svc/loki 3100:3100" -PassThru
-          
-          # Wait up to 15 seconds for port 3100 to open
-          $retries = 0
-          $connected = $false
-          while ($retries -lt 15) {
-              if (Test-NetConnection -ComputerName "127.0.0.1" -Port 3100 -InformationLevel Quiet) {
-                  $connected = $true
-                  break
-              }
-              Start-Sleep -Seconds 1
-              $retries++
-          }
+          # Determine exact internal Loki service address dynamically
+          $lokiSvc = (kubectl get svc -n logging -l "app=loki" -o jsonpath="{.items[0].metadata.name}")
+          if (-not $lokiSvc) { $lokiSvc = "loki" }
 
-          if ($connected) {
-              try {
-                  Invoke-RestMethod -Uri "http://127.0.0.1:3100/loki/api/v1/push" -Method Post -ContentType "application/json" -Body $body
-                  Write-Host "Logs successfully pushed to Loki."
-              } catch {
-                  Write-Warning "Failed to push logs to Loki API: $_"
-              }
-          } else {
-              Write-Warning "Could not establish port-forward to Loki on 127.0.0.1:3100 within 15s."
-          }
+          Write-Host "Sending deployment log to Loki service ($lokiSvc)..."
 
-          # Clean up background process safely
-          if ($pf) {
-              Stop-Process -Id $pf.Id -Force -ErrorAction SilentlyContinue
-          }
+          kubectl run loki-log-pusher --namespace logging --image=curlimages/curl --restart=Never --rm -i -- `
+            curl -s -X POST "http://${lokiSvc}.logging.svc.cluster.local:3100/loki/api/v1/push" `
+            -H "Content-Type: application/json" `
+            -d "$escapedPayload"
