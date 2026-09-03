@@ -141,7 +141,7 @@ jobs:
           Write-Host "--- Checking Persistent Volume Claims ---"
           kubectl get pvc -n database
 
-      12. Ship Pipeline Logs Directly to Loki via In-Cluster Pod
+      #12. Ship Pipeline Logs Directly to Loki via In-Cluster Pod
       # ============================================================
       - name: Send Deployment Log to Loki
         if: always()
