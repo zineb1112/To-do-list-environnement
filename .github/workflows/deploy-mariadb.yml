@@ -164,7 +164,7 @@ jobs:
           Write-Host "--- Checking Persistent Volume Claims ---"
           kubectl get pvc -n database
 
-      # # # ============================================================
+      # # # # ============================================================
       # 12. Ship Pipeline Logs Directly to Loki via In-Cluster Pod
       # ============================================================
       - name: Send Deployment Log to Loki
@@ -195,16 +195,33 @@ jobs:
 
           Write-Host "Targeting Loki endpoint: http://${lokiSvc}.logging.svc.cluster.local:${lokiPort}/loki/api/v1/push"
 
-          # Strictly formatted JSON payload with escaped double quotes
-          $jsonPayload = '{\"streams\":[{\"stream\":{\"job\":\"github-actions\",\"workflow\":\"deploy-mariadb\",\"status\":\"' + $status + '\"},\"values\":[[\"' + $timestamp + '\",\"Workflow run finished with status: ' + $status + '\"]]}]}'
+          # Raw JSON object
+          $rawJson = @"
+          {
+            "streams": [
+              {
+                "stream": {
+                  "job": "github-actions",
+                  "workflow": "deploy-mariadb",
+                  "status": "$status"
+                },
+                "values": [
+                  [ "$timestamp", "Workflow run finished with status $status" ]
+                ]
+              }
+            ]
+          }
+          "@
 
-          # Execute transient log-pusher pod
+          # Encode to Base64 to bypass all escaping issues
+          $bytes = [System.Text.Encoding]::UTF8.GetBytes($rawJson)
+          $base64Json = [Convert]::ToBase64String($bytes)
+
+          # Pass base64 to pod, decode on the fly with base64 -d, and pipe into curl
           kubectl run loki-log-pusher -n logging `
             --image=curlimages/curl:latest `
             --restart=Never `
-            -- curl -s -i -X POST "http://${lokiSvc}.logging.svc.cluster.local:${lokiPort}/loki/api/v1/push" `
-            -H "Content-Type: application/json" `
-            -d "$jsonPayload"
+            -- sh -c "echo '$base64Json' | base64 -d | curl -s -i -X POST 'http://${lokiSvc}.logging.svc.cluster.local:${lokiPort}/loki/api/v1/push' -H 'Content-Type: application/json' --data-binary @-"
 
           # Monitor pusher execution
           Write-Host "Waiting for log pusher pod to complete..."
