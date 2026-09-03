@@ -103,7 +103,7 @@ jobs:
           Write-Host "--- Checking Cluster Health ---"
           kubectl cluster-info
 
-      # ============================================================
+      # # ============================================================
       # 9. Deploy Logging Stack (Loki + Alloy + Grafana)
       # ============================================================
       - name: Deploy Loki, Alloy, Grafana
@@ -114,30 +114,31 @@ jobs:
           helm repo add grafana https://grafana.github.io/helm-charts
           helm repo update
 
-          # Auto-recovery: Detect broken Loki pod and purge release cleanly
+          # Auto-recovery: Purge old state cleanly
           $lokiReady = kubectl get pod loki-0 -n logging -o jsonpath='{.status.containerStatuses[0].ready}' 2>$null
           if ($lokiReady -ne "true") {
-            Write-Host "⚠️ Loki is not ready. Resetting release state..."
+            Write-Host "⚠️ Loki is not ready. Purging existing state..."
             helm uninstall loki -n logging --wait 2>&1 | Out-Null
             kubectl delete statefulset loki -n logging --ignore-not-found 2>&1 | Out-Null
             kubectl delete pvc -l app=loki -n logging --ignore-not-found 2>&1 | Out-Null
             kubectl delete pvc -l app.kubernetes.io/name=loki -n logging --ignore-not-found 2>&1 | Out-Null
             kubectl delete pod loki-0 -n logging --ignore-not-found --grace-period=0 2>&1 | Out-Null
-            Start-Sleep -Seconds 3
+            Start-Sleep -Seconds 5
           }
 
-          # Deploy Helm release disabling persistent storage to avoid local volume permission crashes
+          # Deploy with explicit volume security Context & increased timeout
           helm upgrade --install loki grafana/loki-stack `
             --namespace logging `
             --create-namespace `
             -f monitoring/loki-values.yaml `
             --set loki.persistence.enabled=false `
-            --set loki.isDefault=true
+            --set loki.isDefault=true `
+            --set loki.securityContext.fsGroup=10001 `
+            --set loki.securityContext.runAsGroup=10001 `
+            --set loki.securityContext.runAsUser=10001
 
-          # Wait automatically until Loki pod is 1/1 Running and Ready
           Write-Host "Waiting for Loki StatefulSet to roll out completely..."
-          kubectl rollout status statefulset/loki -n logging --timeout=120s
-
+          kubectl rollout status statefulset/loki -n logging --timeout=300s
       # ============================================================
       # 10. Deploy Application with Helm
       # ============================================================
