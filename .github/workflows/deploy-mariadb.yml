@@ -138,7 +138,7 @@ jobs:
             --set loki.securityContext.runAsUser=10001
 
           Write-Host "Waiting for Loki StatefulSet to roll out completely..."
-          kubectl rollout status statefulset/loki -n logging --timeout=300s
+          kubectl rollout status statefulset/loki -n logging 
       # ============================================================
       # 10. Deploy Application with Helm
       # ============================================================
