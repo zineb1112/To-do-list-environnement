@@ -135,8 +135,8 @@ jobs:
           # Wait automatically until Loki pod is 1/1 Running and Ready
           Write-Host "Waiting for Loki StatefulSet to roll out completely..."
           kubectl rollout status statefulset/loki -n logging --timeout=120s
-      #
-============================================================
+
+      # ============================================================
       # 10. Deploy Application with Helm
       # ============================================================
       - name: Deploy Application with Helm
